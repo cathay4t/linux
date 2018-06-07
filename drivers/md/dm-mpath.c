@@ -11,6 +11,7 @@
 #include "dm-bio-record.h"
 #include "dm-path-selector.h"
 #include "dm-uevent.h"
+#include "dm.h"
 
 #include <linux/blkdev.h>
 #include <linux/ctype.h>
@@ -1167,13 +1168,17 @@ static int fail_path(struct pgpath *pgpath)
 {
 	unsigned long flags;
 	struct multipath *m = pgpath->pg->m;
+	struct mapped_device *md = NULL;
 
 	spin_lock_irqsave(&m->lock, flags);
 
 	if (!pgpath->is_active)
 		goto out;
 
-	DMWARN("Failing path %s.", pgpath->path.dev->name);
+	md = dm_table_get_md(m->ti->table);
+
+	DMWARN_EVENT(md, "DM_MULTIPATH_FAIL_PATH", pgpath->path.dev->name,
+		     "Failing path %s.", pgpath->path.dev->name);
 
 	pgpath->pg->ps.type->fail_path(&pgpath->pg->ps, &pgpath->path);
 	pgpath->is_active = false;
@@ -1204,13 +1209,18 @@ static int reinstate_path(struct pgpath *pgpath)
 	unsigned long flags;
 	struct multipath *m = pgpath->pg->m;
 	unsigned nr_valid_paths;
+	struct mapped_device *md = NULL;
 
 	spin_lock_irqsave(&m->lock, flags);
 
 	if (pgpath->is_active)
 		goto out;
 
-	DMWARN("Reinstating path %s.", pgpath->path.dev->name);
+	md = dm_table_get_md(m->ti->table);
+
+	DMWARN_EVENT(md, "DM_MULTIPATH_REINSTATE_PATH",
+		     pgpath->path.dev->name, "Reinstating path %s.",
+		     pgpath->path.dev->name);
 
 	r = pgpath->pg->ps.type->reinstate_path(&pgpath->pg->ps, &pgpath->path);
 	if (r)
