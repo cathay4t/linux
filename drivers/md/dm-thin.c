@@ -275,6 +275,8 @@ struct pool {
 	struct dm_bio_prison_cell **cell_sort_array;
 };
 
+static void notify_of_pool_mode_change(struct pool *pool, enum pool_mode m);
+
 static enum pool_mode get_pool_mode(struct pool *pool);
 static void metadata_operation_failed(struct pool *pool, const char *op, int r);
 
@@ -1421,8 +1423,9 @@ static void check_low_water_mark(struct pool *pool, dm_block_t free_blocks)
 	unsigned long flags;
 
 	if (free_blocks <= pool->low_water_blocks && !pool->low_water_triggered) {
-		DMWARN("%s: reached low water mark for data device: sending event.",
-		       dm_device_name(pool->pool_md));
+		DMWARN_EVENT(pool->pool_md, "DM_THIN_REACH_LOW_WATER_MARK",
+			     NULL, "%s: reached low water mark for data device: sending event.",
+			     dm_device_name(pool->pool_md));
 		spin_lock_irqsave(&pool->lock, flags);
 		pool->low_water_triggered = true;
 		spin_unlock_irqrestore(&pool->lock, flags);
@@ -2305,8 +2308,6 @@ static void do_waker(struct work_struct *ws)
 	queue_delayed_work(pool->wq, &pool->waker, COMMIT_PERIOD);
 }
 
-static void notify_of_pool_mode_change_to_oods(struct pool *pool);
-
 /*
  * We're holding onto IO to allow userland time to react.  After the
  * timeout either the pool will have been resized (and thus back in
@@ -2319,7 +2320,7 @@ static void do_no_space_timeout(struct work_struct *ws)
 
 	if (get_pool_mode(pool) == PM_OUT_OF_DATA_SPACE && !pool->pf.error_if_no_space) {
 		pool->pf.error_if_no_space = true;
-		notify_of_pool_mode_change_to_oods(pool);
+		notify_of_pool_mode_change(pool, PM_OUT_OF_DATA_SPACE);
 		error_retry_list_with_code(pool, BLK_STS_NOSPC);
 	}
 }
@@ -2392,19 +2393,33 @@ static enum pool_mode get_pool_mode(struct pool *pool)
 	return pool->pf.mode;
 }
 
-static void notify_of_pool_mode_change(struct pool *pool, const char *new_mode)
+static void notify_of_pool_mode_change(struct pool *pool, enum pool_mode m)
 {
-	dm_table_event(pool->ti->table);
-	DMINFO("%s: switching pool to %s mode",
-	       dm_device_name(pool->pool_md), new_mode);
-}
+	const char *mode_str = NULL;
 
-static void notify_of_pool_mode_change_to_oods(struct pool *pool)
-{
-	if (!pool->pf.error_if_no_space)
-		notify_of_pool_mode_change(pool, "out-of-data-space (queue IO)");
-	else
-		notify_of_pool_mode_change(pool, "out-of-data-space (error IO)");
+	switch (m) {
+		case PM_WRITE:
+			mode_str = "write";
+			break;
+		case PM_OUT_OF_DATA_SPACE:
+			if (!pool->pf.error_if_no_space)
+				mode_str = "out-of-data-space (queue IO)";
+			else
+				mode_str = "out-of-data-space (error IO)";
+			break;
+		case PM_READ_ONLY:
+			mode_str = "read-only";
+			break;
+		case PM_FAIL:
+			mode_str = "failure";
+			break;
+		default:
+			mode_str = "unknown";
+	}
+	dm_table_event(pool->ti->table);
+	DMINFO_EVENT(pool->pool_md, "DM_THIN_POOL_MODE_CHANGE", mode_str,
+		     "%s: switching pool to %s mode",
+		     dm_device_name(pool->pool_md), mode_str);
 }
 
 static bool passdown_enabled(struct pool_c *pt)
@@ -2456,7 +2471,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 	switch (new_mode) {
 	case PM_FAIL:
 		if (old_mode != new_mode)
-			notify_of_pool_mode_change(pool, "failure");
+			notify_of_pool_mode_change(pool, PM_FAIL);
 		dm_pool_metadata_read_only(pool->pmd);
 		pool->process_bio = process_bio_fail;
 		pool->process_discard = process_bio_fail;
@@ -2470,7 +2485,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 
 	case PM_READ_ONLY:
 		if (old_mode != new_mode)
-			notify_of_pool_mode_change(pool, "read-only");
+			notify_of_pool_mode_change(pool, PM_READ_ONLY);
 		dm_pool_metadata_read_only(pool->pmd);
 		pool->process_bio = process_bio_read_only;
 		pool->process_discard = process_bio_success;
@@ -2492,7 +2507,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 		 * frequently seeing this mode.
 		 */
 		if (old_mode != new_mode)
-			notify_of_pool_mode_change_to_oods(pool);
+			notify_of_pool_mode_change(pool, PM_OUT_OF_DATA_SPACE);
 		pool->out_of_data_space = true;
 		pool->process_bio = process_bio_read_only;
 		pool->process_discard = process_discard_bio;
@@ -2506,7 +2521,7 @@ static void set_pool_mode(struct pool *pool, enum pool_mode new_mode)
 
 	case PM_WRITE:
 		if (old_mode != new_mode)
-			notify_of_pool_mode_change(pool, "write");
+			notify_of_pool_mode_change(pool, PM_WRITE);
 		pool->out_of_data_space = false;
 		pool->pf.error_if_no_space = pt->requested_pf.error_if_no_space;
 		dm_pool_metadata_read_write(pool->pmd);
