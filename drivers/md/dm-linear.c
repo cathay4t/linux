@@ -57,6 +57,10 @@ static int linear_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad;
 	}
 
+	DMINFO_EVENT(dm_table_get_md(ti->table), "DM_LINEAR_LV_CREATE", NULL,
+		     "New logical volume created %s",
+		     dm_device_name(dm_table_get_md(ti->table)));
+
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
 	ti->num_write_same_bios = 1;
