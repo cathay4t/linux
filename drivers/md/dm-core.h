@@ -12,6 +12,7 @@
 #include <linux/kthread.h>
 #include <linux/ktime.h>
 #include <linux/blk-mq.h>
+#include <linux/dm-ioctl.h>
 
 #include <trace/events/block.h>
 
@@ -128,6 +129,7 @@ struct mapped_device {
 	bool init_tio_pdu:1;
 
 	struct srcu_struct io_barrier;
+	char uuid[DM_UUID_LEN];
 };
 
 void dm_init_md_queue(struct mapped_device *md);

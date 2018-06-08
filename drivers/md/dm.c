@@ -24,6 +24,8 @@
 #include <linux/delay.h>
 #include <linux/wait.h>
 #include <linux/pr.h>
+#include <stdarg.h>
+#include <linux/dm-ioctl.h>
 
 #define DM_MSG_PREFIX "core"
 
@@ -33,6 +35,7 @@
  */
 #define DM_COOKIE_ENV_VAR_NAME "DM_COOKIE"
 #define DM_COOKIE_LENGTH 24
+#define DM_DEV_PRINTK_DICT_LEN 256
 
 static const char *_name = DM_NAME;
 
@@ -2764,7 +2767,7 @@ struct dm_md_mempools *dm_alloc_md_mempools(struct mapped_device *md, enum dm_qu
 	case DM_TYPE_DAX_BIO_BASED:
 		pool_size = dm_get_reserved_bio_based_ios();
 		front_pad = roundup(per_io_data_size, __alignof__(struct dm_target_io)) + offsetof(struct dm_target_io, clone);
-	
+
 		pools->io_pool = mempool_create_slab_pool(pool_size, _io_cache);
 		if (!pools->io_pool)
 			goto out;
@@ -2986,6 +2989,73 @@ static const struct dax_operations dm_dax_ops = {
 	.direct_access = dm_dax_direct_access,
 	.copy_from_iter = dm_dax_copy_from_iter,
 };
+
+void dm_dev_printk(int level, struct mapped_device *md, const char *event_type,
+		   const char *extra, const char *fmt, ...)
+{
+	char dict[DM_DEV_PRINTK_DICT_LEN];
+	char buf[BDEVNAME_SIZE];
+	size_t dict_len = 0;
+	va_list args;
+
+	dict_len += scnprintf(dict + dict_len,
+			      DM_DEV_PRINTK_DICT_LEN - dict_len,
+			      "SUBSYSTEM=dm") + 1;
+	if (event_type) {
+		dict_len += scnprintf(dict + dict_len,
+				      DM_DEV_PRINTK_DICT_LEN - dict_len,
+				      "EVENT_TYPE=%s", event_type) + 1;
+		if (dict_len >= DM_DEV_PRINTK_DICT_LEN)
+			goto out;
+	}
+
+	if (md) {
+		dict_len += scnprintf(dict + dict_len,
+				      DM_DEV_PRINTK_DICT_LEN - dict_len,
+				      "DM_UUID=%s", dm_get_uuid(md)) + 1;
+		if (dict_len >= DM_DEV_PRINTK_DICT_LEN)
+			goto out;
+
+		dict_len += scnprintf(dict + dict_len,
+				      DM_DEV_PRINTK_DICT_LEN - dict_len,
+				      "DEVICE=%s", md->disk->disk_name) + 1;
+		if (dict_len >= DM_DEV_PRINTK_DICT_LEN)
+			goto out;
+	}
+
+	if (extra) {
+		dict_len += scnprintf(dict + dict_len,
+				      DM_DEV_PRINTK_DICT_LEN - dict_len,
+				      "EXTRA=%s", extra) + 1;
+		if (dict_len >= DM_DEV_PRINTK_DICT_LEN)
+			goto out;
+	}
+
+out:
+	if (dict_len > 1)
+		dict_len--;
+
+	va_start(args, fmt);
+	vprintk_emit(0 /* Kernel */, level, dict, dict_len, fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL_GPL(dm_dev_printk);
+
+void dm_set_uuid(struct mapped_device *md, const char *uuid)
+{
+	if (uuid == NULL) {
+		md->uuid[0] = '\0';
+	} else {
+		strncpy(md->uuid, uuid, DM_UUID_LEN);
+	}
+}
+EXPORT_SYMBOL_GPL(dm_set_uuid);
+
+const char *dm_get_uuid(struct mapped_device *md)
+{
+	return md->uuid;
+}
+EXPORT_SYMBOL_GPL(dm_get_uuid);
 
 /*
  * module hooks

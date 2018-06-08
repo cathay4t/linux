@@ -766,6 +766,8 @@ static int dev_create(struct file *filp, struct dm_ioctl *param, size_t param_si
 		return r;
 	}
 
+	dm_set_uuid(md, *param->uuid ? param->uuid : NULL);
+
 	param->flags &= ~DM_INACTIVE_PRESENT_FLAG;
 
 	__dev_status(md, param);

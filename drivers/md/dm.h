@@ -213,4 +213,32 @@ void dm_free_md_mempools(struct dm_md_mempools *pools);
  */
 unsigned dm_get_reserved_bio_based_ios(void);
 
+void dm_dev_printk(int level, struct mapped_device *md, const char *event_type,
+		   const char *extra, const char *fmt, ...);
+void dm_set_uuid(struct mapped_device *md, const char *uuid);
+const char *dm_get_uuid(struct mapped_device *md);
+
+/*
+ * DMINFO_EVENT, DMWARN_EVENT, DMERR_EVENT, DMCRIT_EVENT use printk_emit()
+ * to generate structured log to /dev/kmsg with key/value pairs:
+ *	SUBSYSTEM=dm
+ *	EVENT_TYPE=<event type string>
+ *	DEVICE=<dm number>			# Like 'dm-1'
+ *	DM_UUID=<DM_UUID>			# The uuid from ioctl.
+ *	EXTRA=<extra string>			# Optional.
+ */
+#define DMINFO_EVENT(md, event_type, extra, fmt, ...) \
+	dm_dev_printk(LOGLEVEL_INFO, md, event_type, extra,\
+		      DM_FMT(fmt), ##__VA_ARGS__)
+
+#define DMWARN_EVENT(md, event_type, extra, fmt, ...) \
+	dm_dev_printk(LOGLEVEL_WARNING, md, event_type, extra, \
+		      DM_FMT(fmt), ##__VA_ARGS__)
+
+#define DMERR_EVENT(md, event_type, extra, fmt, ...) \
+	dm_dev_printk(LOGLEVEL_ERR, md, event_type, DM_FMT(fmt), ##__VA_ARGS__)
+
+#define DMCRIT_EVENT(md, event_type, extra, fmt, ...) \
+	dm_dev_printk(LOGLEVEL_CRIT, md, event_type, DM_FMT(fmt), ##__VA_ARGS__)
+
 #endif
