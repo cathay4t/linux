@@ -17,6 +17,7 @@
 #include <scsi/scsi_dbg.h>
 
 #define SCSI_LOG_SPOOLSIZE 4096
+#define SCSI_LOG_DICT_SIZE 256
 
 #if (SCSI_LOG_SPOOLSIZE / SCSI_LOG_BUFSIZE) > BITS_PER_LONG
 #warning SCSI logging bitmask too large
@@ -26,6 +27,14 @@ struct scsi_log_buf {
 	char buffer[SCSI_LOG_SPOOLSIZE];
 	unsigned long map;
 };
+
+#pragma pack(push, 1)
+struct scsi_vpd_80_hdr {
+	__u8 ignore[2];
+	__u16 len;
+	__u8 sn_begin;
+};
+#pragma pack(pop)
 
 static DEFINE_PER_CPU(struct scsi_log_buf, scsi_format_log);
 
@@ -120,28 +129,130 @@ void sdev_prefix_printk(const char *level, const struct scsi_device *sdev,
 }
 EXPORT_SYMBOL(sdev_prefix_printk);
 
-void scmd_printk(const char *level, const struct scsi_cmnd *scmd,
-		const char *fmt, ...)
+static int sdev_extract_serial_num(struct scsi_device *sdev,
+				   char *buff, ssize_t buff_len)
 {
-	va_list args;
-	char *logbuf;
-	size_t off = 0, logbuf_len;
+	struct scsi_vpd *vpd_page = NULL;
+	int ret = 0;
+	__u16 sn_len = 0;
+	struct scsi_vpd_80_hdr *hdr = NULL;
+
+	rcu_read_lock();
+	vpd_page = rcu_dereference(sdev->vpd_pg80);
+	if (vpd_page) {
+		hdr = (struct scsi_vpd_80_hdr *) vpd_page->data;
+		sn_len = be16_to_cpu(hdr->len);
+		if (sn_len < buff_len)
+			ret += scnprintf(buff, sn_len + 1, "%s",
+					 (char *) &hdr->sn_begin);
+		else
+			dev_warn_once(&sdev->sdev_gendev,
+				      "Serial number from VPD 0x80 page exceeded to max length %zd",
+				      buff_len);
+	}
+	rcu_read_unlock();
+	return ret;
+}
+
+static size_t scmd_printk_gen_dict(const struct scsi_cmnd *scmd,
+				   const char *event_type,
+				   const char *extra, char *dict,
+				   size_t dict_len)
+{
+	size_t ret = 0;
+	char *sn = NULL;
+	size_t sn_len = 0;
+	struct scsi_sense_hdr sshdr;
+
+	ret += scnprintf(dict + ret, dict_len - ret, "SUBSYSTEM=scsi") + 1;
+	if (ret >= dict_len)
+		goto out;
+	ret += scnprintf(dict + ret, dict_len - ret, "DEVICE=%s",
+			 scmd_name(scmd)) + 1;
+	if (ret >= dict_len)
+		goto out;
+	if (event_type) {
+		ret += scnprintf(dict + ret, dict_len - ret, "EVENT_TYPE=%s",
+				 event_type) + 1;
+		if (ret >= dict_len)
+			goto out;
+	}
+	if (extra) {
+		ret += scnprintf(dict + ret, dict_len - ret, "EXTRA=%s",
+				 extra) + 1;
+		if (ret >= dict_len)
+			goto out;
+	}
+
+	sn = scsi_log_reserve_buffer(&sn_len);
+	if (!sn)
+		goto out;
+	if (sdev_extract_serial_num(scmd->device, sn, sn_len))
+		ret += scnprintf(dict + ret, dict_len - ret,
+				 "SERIAL_NUMBER=%s", sn) + 1;
+	scsi_log_release_buffer(sn);
+
+out:
+	ret--;
+	return ret;
+}
+
+static void _scmd_printk_emit(const char *level, const struct scsi_cmnd *scmd,
+			      const char *event_type, const char *extra,
+			      const char *fmt, va_list args)
+{
+	char *logbuf = NULL;
+	char dict[SCSI_LOG_DICT_SIZE];
+	struct device *dev = NULL;
+	size_t off = 0;
+	size_t logbuf_len = 0;
+	size_t dict_len = 0;
 
 	if (!scmd || !scmd->cmnd)
 		return;
+
+	dev = &scmd->device->sdev_gendev;
 
 	logbuf = scsi_log_reserve_buffer(&logbuf_len);
 	if (!logbuf)
 		return;
 	off = sdev_format_header(logbuf, logbuf_len, scmd_name(scmd),
 				 scmd->request->tag);
-	if (off < logbuf_len) {
-		va_start(args, fmt);
+	if (off < logbuf_len)
 		off += vscnprintf(logbuf + off, logbuf_len - off, fmt, args);
-		va_end(args);
+	if (event_type != NULL) {
+		dict_len = scmd_printk_gen_dict(scmd, event_type, extra, dict,
+						SCSI_LOG_DICT_SIZE);
+		printk_emit(0 /* Kernel */, level[1] - 0, dict,
+			    dict_len, "%s %s: %s",
+			    dev_driver_string(dev), dev_name(dev),
+			    logbuf);
+	} else {
+		dev_printk(level, dev, "%s", logbuf);
 	}
-	dev_printk(level, &scmd->device->sdev_gendev, "%s", logbuf);
 	scsi_log_release_buffer(logbuf);
+}
+
+void scmd_printk_emit(const char *level, const struct scsi_cmnd *scmd,
+		      const char *event_type, const char *extra,
+		      const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	_scmd_printk_emit(level, scmd, event_type, extra, fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL(scmd_printk_emit);
+
+void scmd_printk(const char *level, const struct scsi_cmnd *scmd,
+		 const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	_scmd_printk_emit(level, scmd, NULL, NULL, fmt, args);
+	va_end(args);
 }
 EXPORT_SYMBOL(scmd_printk);
 

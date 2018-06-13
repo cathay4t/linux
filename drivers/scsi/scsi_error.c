@@ -385,12 +385,15 @@ static void scsi_report_lun_change(struct scsi_device *sdev)
  * @sdev:	Device reporting the sense code
  * @sshdr:	sshdr to be examined
  */
-static void scsi_report_sense(struct scsi_device *sdev,
+static void scsi_report_sense(struct scsi_cmnd *scmd, struct scsi_device *sdev,
 			      struct scsi_sense_hdr *sshdr)
 {
 	enum scsi_device_event evt_type = SDEV_EVT_MAXBITS;	/* i.e. none */
 
-	if (sshdr->sense_key == UNIT_ATTENTION) {
+	if (sshdr->sense_key == MEDIUM_ERROR) {
+		scmd_printk_emit(KERN_ERR, scmd, "SCSI_MEDIA_ERR",
+				 NULL, "Warning! Got media error");
+	} else if (sshdr->sense_key == UNIT_ATTENTION) {
 		if (sshdr->asc == 0x3f && sshdr->ascq == 0x03) {
 			evt_type = SDEV_EVT_INQUIRY_CHANGE_REPORTED;
 			sdev_printk(KERN_WARNING, sdev,
@@ -460,7 +463,7 @@ int scsi_check_sense(struct scsi_cmnd *scmd)
 	if (! scsi_command_normalize_sense(scmd, &sshdr))
 		return FAILED;	/* no valid sense data */
 
-	scsi_report_sense(sdev, &sshdr);
+	scsi_report_sense(scmd, sdev, &sshdr);
 
 	if (scsi_sense_is_deferred(&sshdr))
 		return NEEDS_RETRY;

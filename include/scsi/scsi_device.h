@@ -248,6 +248,10 @@ sdev_prefix_printk(const char *, const struct scsi_device *, const char *,
 __printf(3, 4) void
 scmd_printk(const char *, const struct scsi_cmnd *, const char *, ...);
 
+__printf(5, 6) void
+scmd_printk_emit(const char *, const struct scsi_cmnd *, const char *,
+		 const char *, const char *, ...);
+
 #define scmd_dbg(scmd, fmt, a...)					   \
 	do {								   \
 		if ((scmd)->request->rq_disk)				   \
